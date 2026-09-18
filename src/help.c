@@ -31,6 +31,7 @@ static const char *page_keys[] = {
     " + / -   zoom in / out",
     " trace   trace cursor on/off",
     " graph   F(x) curve on/off",
+    " math    show the antiderivative",
     " y=      edit f(x)",
     " window  edit bounds a and b",
     " zoom    reset the window",

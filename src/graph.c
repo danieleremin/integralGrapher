@@ -1,5 +1,6 @@
 #include "graph.h"
 #include "help.h"
+#include "antideriv.h"
 #include "mathprint.h"
 #include "fmt.h"
 
@@ -481,7 +482,7 @@ static void draw_status(const GraphState *g, const char *msg) {
         line[p] = '\0';
         gfx_PrintStringXY(line, 4, STATUS_Y + 18);
     } else {
-        gfx_PrintStringXY("pan:arrows zoom:+/- help:alpha", 4, STATUS_Y + 18);
+        gfx_PrintStringXY("pan:arrows zoom:+/- help:alpha sym:math", 4, STATUS_Y + 18);
     }
 }
 
@@ -541,6 +542,14 @@ int grf_run(GraphState *g) {
 
         if (key_edge(kb_KeyAlpha)) {
             help_show();          /* owns the keypad while it is up */
+            kb_Scan();
+            keys_save();
+            status_changed();
+            render_full(g, msg);
+            continue;
+        }
+        if (key_edge(kb_KeyMath)) {
+            antideriv_show(g);    /* likewise */
             kb_Scan();
             keys_save();
             status_changed();

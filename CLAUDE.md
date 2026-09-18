@@ -6,9 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 INTGRPH — a TI-84 Plus CE program (C, eZ80, CE toolchain) that graphs f(x),
 shades ∫ₐᵇ f, prints the value, and draws the running integral F(x) = ∫ₐˣ f as a
-second curve. Typing `x` as `b` graphs F(x) alone. README.md is the user
-manual and has the full key map, accuracy table, and design rationale; read it
-before changing UI behaviour.
+second curve. Typing `x` as `b` graphs F(x) alone. `math` on the graph screen
+shows the symbolic antiderivative (rule-based engine ported from the sibling
+`../integralCalc` project). README.md is the user manual and has the full key
+map, accuracy table, and design rationale; read it before changing UI
+behaviour.
 
 ## Build
 
@@ -27,24 +29,37 @@ make clean
 Source files use LF line endings. Python's default text mode on Windows
 rewrites them to CRLF — write with `newline=''` or run `sed -i 's/\r$//'`.
 
-## Testing (there are no unit tests)
+## Testing
 
-Everything is verified on the emulator. Headless driving with screenshots:
-`C:\CEdev\bin\cemu-autotester.exe -d .\config.json` run from the config's own
-directory. The config needs `rom`, `transfer_files` (**must include
-`clibs.8xg`** or the program dies with "Need LibLoad"), `target:
-{name: "INTGRPH", isASM: true}`, and a `sequence` that **starts with
-`action|launch`, `delay|2500`**. Key names: `xton` is the X key; `y=`, `window`,
-`zoom`, `trace`, `graph`, `enter`, `del`, `clear`, digits, `+ - * / ^ ( )`,
+The symbolic engine has a host-side check: `tools/symtest/build.sh` compiles
+`expr.c`, `symbolic.c` and `fmt.c` with any host gcc (on this machine the
+Ruby devkit's: `PATH="/c/Ruby34-x64/msys64/ucrt64/bin:$PATH"`), integrates a
+list of editor-style inputs, prints the results and fails on any leaked
+allocation. Run it after touching `expr.c`'s simplifier or `symbolic.c`.
+
+Everything else is verified on the emulator. Headless driving with screenshots:
+`C:\CEdev\bin\cemu-autotester.exe -d <absolute path to config.json>` (the
+autotester chdirs to the config's directory itself; a relative path fails with
+"Couldn't change directory path"). The config needs `rom`, `transfer_files`
+(**must include `clibs.8xg`** or the program dies with "Need LibLoad"),
+`target: {name: "INTGRPH", isASM: true}`, a `sequence` that **starts with
+`action|launch`, `delay|2500`**, and a `hashes` object keyed by the names used
+in `hash|<name>` steps with `start: "vram_start"`, `size: "vram_16_size"`.
+Key names: `xton` is the X key; `y=`, `window`, `zoom`, `trace`, `graph`,
+`math`, `alpha`, `enter`, `del`, `clear`, digits, `+ - * / ^ ( )`,
 `sin cos tan ln log`, arrows. Leave ~500 ms after a digit before `enter` — the
-editors' `os_GetCSC` loop drops faster presses. Give each `hash` step a bogus
-`expected_CRCs: ["1"]`: the "failure" dumps VRAM (two 320×240 8bpp buffers
-back to back; the displayed one alternates with `gfx_SwapDraw`) to
+editors' `os_GetCSC` loop drops faster presses — and wait several seconds
+after accepting `b` for a transcendental f (the Simpson pass runs first).
+Give each `hash` step a bogus `expected_CRCs: ["1"]`: the "failure" dumps VRAM
+(two 320×240 8bpp buffers back to back; the displayed one alternates with
+`gfx_SwapDraw`, so two dumps with the same CRC can still be different screens —
+prove a transition with a visible state change, not by CRC) to
 `failure_hash<n>_num<n>_dump.bin`, convertible with PIL using the palette in
 `grf_init_palette()` (indices 0 = black, 255 = white, 1–7 custom).
 
 The interactive CEmu build is at `~/Downloads/CEmu-v2.0_win64_Qt6.exe`; ROM
-and `clibs.8xg` are in `~/Downloads`.
+and `clibs.8xg` are in `~/Downloads` (`clibs.8xg` is the release asset from
+github.com/CE-Programming/libraries).
 
 ## Architecture
 
@@ -59,6 +74,15 @@ compiles the simplified AST into a flat postfix bytecode tape (`ExprCode`)
 run by a float stack machine (`ec_eval`), plus `ec_integrate` (composite
 Simpson, Kahan sum, halved-resolution disagreement sets the `!` warning).
 `mathprint.c` renders the *unsimplified* AST 2-D in the editor.
+
+Symbolic path (on demand only, nothing cached in `GraphState`): `math` in the
+graph loop calls `antideriv_show()` (`antideriv.c`), which re-parses `ftext`,
+simplifies a clone, runs `ast_integrate()` (`symbolic.c`, a verbatim port of
+integralCalc's `calculate_integral` plus `ast_derivative`/`ast_equal`),
+simplifies the result, compiles it with `ec_compile` to evaluate G(a), draws
+the page with `mathprint.c` (falling back to `ast_to_string` text when too
+wide), and frees everything on exit. `ast_integrate` returns NULL when no
+rule matches; the rule list is in README.md.
 
 `graph.c` keeps one cached sample per screen column (`fcol`/`Fcol`, world
 values) and their projected rows (`fy`/`Fy`, int16). F is one left-to-right
@@ -88,3 +112,9 @@ full recompute.
 - Implicit multiplication (`2x`, `(x+1)(x-2)`) is inserted by the *editor*
   at append time (`needs_implicit_mul` in `input.c`); the parser has none.
 - Expressions are capped at 64 chars (`ftext[65]`, `EC_MAX_CODE`).
+- `antideriv_show()` and `help_show()` are the only keypadc screens besides
+  the graph loop; both end with the drain-and-`kb_Reset()` sequence and the
+  caller re-`kb_Scan()`s, `keys_save()`s and `status_changed()`s afterwards.
+- `symbolic.c` allocates freely (every rule clones); every `return NULL` path
+  must free what it built, because the overlay may be opened many times per
+  session on a small heap.

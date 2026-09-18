@@ -3,7 +3,8 @@
 Type a function; the calculator graphs it, shades the area between two bounds,
 prints the value of the definite integral, and draws the running integral
 F(x) = ∫ₐˣ f(t)dt as a second curve. Pan and zoom are fast enough to explore
-with.
+with. `math` shows the antiderivative in closed form when the built-in rules
+can find one.
 
 ```
  +--------------------------------------------+
@@ -14,7 +15,7 @@ with.
  |  0    1    2    3   \,-'  5    6    7      |
  +--------------------------------------------+
  | [0,3.14159] = 2                     F:on   |
- | pan:arrows zoom:+/- help:alpha             |
+ | pan:arrows zoom:+/- help:alpha sym:math    |
  +--------------------------------------------+
 ```
 
@@ -63,12 +64,63 @@ f curve, no shading — and the status bar reads `∫[a,x] = F(x)`.
 | `window` | Edit the bounds a and b |
 | `zoom` | Reset to the standard window |
 | `alpha` | Help |
+| `math` | Show the antiderivative (see below) |
 | `mode` / `clear` | Quit |
 
 In trace mode the arrows move the cursor (hold `2nd` to move four times as
 fast), pushing past either edge pans the window, `ENTER` recenters on the
 cursor, and `+`/`−` zoom about it. The status bar then reads out `x`, `f(x)`,
 and `F(x)` at the cursor.
+
+### The antiderivative
+
+`math` on the graph screen opens a page with the symbolic result:
+
+```
+ ∫ x² dx
+ =  x³/3 + C
+ F(x) = G(x) - G(a)
+ a = 0   G(a) = 0
+```
+
+The first two lines are the indefinite integral, drawn the same 2-D way as
+the editor draws f (stacked fractions, superscripts, `|…|`). The last two tie
+it to the purple curve: F(x) on the graph is exactly G(x) − G(a), and G(a) is
+evaluated for you (`?` if G is undefined at a, e.g. `ln|x|` at a = 0). Any key
+returns to the graph. When the result is too wide for the 2-D layout it is
+printed as plain text instead.
+
+The integrator is the rule set from my symbolic integral calculator, tried in
+this order — first match wins, otherwise the page says `No rule found`:
+
+1. **Constant** — ∫c dx = c·x
+2. **Variable** — ∫x dx = x²/2
+3. **Linearity** — sums and differences term by term
+4. **Constant factor** — ∫c·f dx = c·∫f dx
+5. **u-substitution over a product** — ∫f(g)·g′ dx for f ∈ {sin, cos, tan,
+   exp, ln}, ∫gⁿ·g′ dx, and ∫g·g′ dx = g²/2, with any constant multiple of
+   g′ (∫cos(x²)·x dx works even though (x²)′ = 2x)
+6. **u-substitution over a quotient** — ∫c·g′/g dx = c·ln|g|, plus ∫c/x dx
+7. **Power of a linear base** — ∫(ax+b)ⁿ dx, including n = −1 → ln|ax+b|
+8. **Elementary function of a linear argument** — sin, cos, tan, exp, ln of
+   (ax+b), divided by a
+
+| f(x) | Shows |
+|---|---|
+| `x^2` | `x³/3 + C` |
+| `2x` | `x² + C` |
+| `(2x+1)^3` | `(2x+1)⁴/8 + C` |
+| `sin(x^2)*2x` | `-cos(x²) + C` |
+| `2x/(x^2+1)` | `ln\|x²+1\| + C` |
+| `1/x` | `ln\|x\| + C` |
+| `abs(x)` | `No rule found` |
+
+What it cannot do: expand products (`(x²+1)²` is not distributed), integrate
+by parts, partial fractions, trig identities (`sin(x)²`), or anything through
+`sqrt`, `log`, `abs` (no antiderivative rule for those). Matching is
+structural, so `ln(x)/x` misses u = ln(x) because `1/x` and `x^-1` are not
+recognised as the same thing. The numeric F(x) on the graph is unaffected by
+any of this.
 
 ### Reading the results
 
@@ -152,7 +204,7 @@ build.bat        (Windows; uses the CEDEV env var, or ..\CEDev)
 ```
 
 or, with `$CEDEV/bin` on your PATH, just `make`. Output is `bin/INTGRPH.8xp`
-(~33 KB). Send it to the calculator with TI Connect CE, or load it in
+(~46 KB). Send it to the calculator with TI Connect CE, or load it in
 [CEmu](https://ce-programming.github.io/CEmu/).
 
 **The C libraries (`clibs.8xg`) must be on the calculator too**, or the program
@@ -163,7 +215,9 @@ refuses to start with "Need LibLoad / clibs".
 | File | Purpose |
 |---|---|
 | `src/main.c` | Screen flow: edit f, edit a and b, graph |
-| `src/expr.c` | Tokenizer, parser, AST, constant folding |
+| `src/expr.c` | Tokenizer, parser, AST, constant folding, text printer |
+| `src/symbolic.c` | Symbolic derivative and antiderivative rules |
+| `src/antideriv.c` | The `math` antiderivative page |
 | `src/eval.c` | Bytecode compiler, evaluator, Simpson quadrature |
 | `src/graph.c` | Viewport, column caches, drawing, pan/zoom/trace loop |
 | `src/input.c` | Keypad expression editor |
@@ -171,8 +225,9 @@ refuses to start with "Need LibLoad / clibs".
 | `src/fmt.c` | Compact float formatting |
 | `src/help.c` | In-app help pages |
 
-About 2,900 lines of C. `expr.c` and `mathprint.c` are adapted from my symbolic
-integral calculator; the numeric engine, graphing, and caching are new here.
+About 3,800 lines of C. `expr.c`, `symbolic.c` and `mathprint.c` are adapted
+from my symbolic integral calculator; the numeric engine, graphing, and caching
+are new here.
 
 Two things that are easy to trip over when reading the code: the AST stores its
 children **right operand first** (`ast_get_left` / `ast_get_right` in `expr.c`
@@ -186,8 +241,8 @@ about 7 KB.
 
 ## Limitations
 
-- No symbolic integration — this program is numeric only. `main.c`'s
-  `refresh_integral()` marks where an antiderivative display would attach.
+- The symbolic integrator is rule-based, not a CAS — see "The antiderivative"
+  above for what it does and doesn't cover. The graph never depends on it.
 - No `asin` / `acos` / `atan`, and no variables other than `x` (plus the
   constants `pi` and `e`).
 - Expressions are capped at 64 characters.

@@ -1,11 +1,13 @@
 #include "expr.h"
+#include "fmt.h"
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
 /* Trimmed from cePort/src/integrate.c: tokenizer, parser, AST utilities and
  * constant-folding simplifier. Symbolic differentiation/integration and the
- * debug/pretty printers are intentionally not carried over. */
+ * debug printer are not carried over here; the integration rules live in
+ * symbolic.c and the text printer (ast_to_string) is at the end of this file. */
 
 // ======================
 // TOKENIZER
@@ -152,14 +154,14 @@ static int tokenize(const char* expr, Token* tokens, int max_tokens) {
 // AST NODE CREATION
 // ======================
 
-static ASTNode* ast_create_num(double value) {
+ASTNode* ast_create_num(double value) {
     ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
     node->type = NODE_NUM;
     node->data.num_value = value;
     return node;
 }
 
-static ASTNode* ast_create_sym(const char* name) {
+ASTNode* ast_create_sym(const char* name) {
     ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
     node->type = NODE_SYM;
     strncpy(node->data.sym_name, name, 31);
@@ -167,7 +169,7 @@ static ASTNode* ast_create_sym(const char* name) {
     return node;
 }
 
-static ASTNode* ast_create_op(NodeType op_type, ASTNode* left, ASTNode* right) {
+ASTNode* ast_create_op(NodeType op_type, ASTNode* left, ASTNode* right) {
     ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
     node->type = op_type;
 
@@ -183,7 +185,7 @@ static ASTNode* ast_create_op(NodeType op_type, ASTNode* left, ASTNode* right) {
     return node;
 }
 
-static ASTNode* ast_create_func(NodeType func_type, ASTNode* arg) {
+ASTNode* ast_create_func(NodeType func_type, ASTNode* arg) {
     ASTNode* node = (ASTNode*)malloc(sizeof(ASTNode));
     node->type = func_type;
 
@@ -400,7 +402,7 @@ void ast_free_tree(ASTNode* node) {
 // AST HELPERS
 // ======================
 
-static int node_is_func(NodeType t) {
+int node_is_func(NodeType t) {
     return t >= NODE_FUNC_SIN && t <= NODE_FUNC_ABS;
 }
 
@@ -428,7 +430,7 @@ static int ast_is_num(const ASTNode* n) {
     return n && n->type == NODE_NUM;
 }
 
-static int ast_num_eq(const ASTNode* n, double v) {
+int ast_num_eq(const ASTNode* n, double v) {
     return ast_is_num(n) && n->data.num_value == v;
 }
 
@@ -471,14 +473,21 @@ int ast_contains_var(const ASTNode* node, char var) {
     return 0;
 }
 
+// Replace `child`'s slot in `parent` with NULL so freeing `parent` (or an
+// ancestor) leaves `child` alive. Returns `child`.
+static ASTNode* unlink_child(ASTNode* parent, ASTNode* child) {
+    if (parent && node_has_children(parent->type)) {
+        for (ChildNode* c = parent->data.children; c; c = c->next) {
+            if (c->node == child) { c->node = NULL; break; }
+        }
+    }
+    return child;
+}
+
 // Detach `keep` from `parent`'s child list (replacing it with NULL), then
 // free the parent and remaining children. Returns `keep`.
 static ASTNode* detach_and_free_parent(ASTNode* parent, ASTNode* keep) {
-    if (parent && node_has_children(parent->type)) {
-        for (ChildNode* c = parent->data.children; c; c = c->next) {
-            if (c->node == keep) { c->node = NULL; break; }
-        }
-    }
+    unlink_child(parent, keep);
     ast_free_tree(parent);
     return keep;
 }
@@ -568,7 +577,18 @@ ASTNode* ast_simplify(ASTNode* node) {
             break;
         case NODE_OP_SUB:
             if (ast_num_eq(R, 0.0)) return detach_and_free_parent(node, L);
-            // 0 - x is left as-is (unary negation form)
+            // 0 - x is left as-is (unary negation form) ...
+            // ... but 0 - (0 - u) is just u, and a - (0 - u) is a + u.
+            if (R->type == NODE_OP_SUB && ast_num_eq(ast_get_left(R), 0.0)) {
+                ASTNode* U = unlink_child(R, ast_get_right(R));
+                if (ast_num_eq(L, 0.0)) {
+                    ast_free_tree(node);
+                    return U;
+                }
+                unlink_child(node, L);
+                ast_free_tree(node);
+                return ast_create_op(NODE_OP_ADD, L, U);
+            }
             break;
         case NODE_OP_MUL:
             if (ast_num_eq(L, 0.0) || ast_num_eq(R, 0.0)) {
@@ -577,6 +597,39 @@ ASTNode* ast_simplify(ASTNode* node) {
             }
             if (ast_num_eq(L, 1.0)) return detach_and_free_parent(node, R);
             if (ast_num_eq(R, 1.0)) return detach_and_free_parent(node, L);
+            /* A numeric factor next to a fraction or a negation: move it
+             * inside, so the constant-factor integration rule yields x^2
+             * rather than 2*x^2/2, and -(2*cos(x)) rather than 2*(-cos(x)).
+             *   c * (N/d) -> (c/d)*N when c/d is an integer, else (c*N)/d
+             *   c * (0-u) -> 0 - c*u                                      */
+            {
+                ASTNode* cn = ast_is_num(L) ? L : (ast_is_num(R) ? R : NULL);
+                ASTNode* other = (cn == L) ? R : L;
+                if (cn && other->type == NODE_OP_DIV &&
+                    ast_is_num(ast_get_right(other)) &&
+                    ast_get_right(other)->data.num_value != 0.0) {
+                    double c = cn->data.num_value;
+                    double d = ast_get_right(other)->data.num_value;
+                    double q = c / d;
+                    ASTNode* N = unlink_child(other, ast_get_left(other));
+                    ast_free_tree(node);
+                    if (q == (double)(long)q) {
+                        if (q == 1.0) return N;
+                        return ast_simplify(ast_create_op(NODE_OP_MUL, ast_create_num(q), N));
+                    }
+                    return ast_create_op(NODE_OP_DIV,
+                        ast_simplify(ast_create_op(NODE_OP_MUL, ast_create_num(c), N)),
+                        ast_create_num(d));
+                }
+                if (cn && other->type == NODE_OP_SUB &&
+                    ast_num_eq(ast_get_left(other), 0.0)) {
+                    double c = cn->data.num_value;
+                    ASTNode* U = unlink_child(other, ast_get_right(other));
+                    ast_free_tree(node);
+                    return ast_create_op(NODE_OP_SUB, ast_create_num(0.0),
+                        ast_simplify(ast_create_op(NODE_OP_MUL, ast_create_num(c), U)));
+                }
+            }
             break;
         case NODE_OP_DIV:
             if (ast_num_eq(R, 1.0)) return detach_and_free_parent(node, L);
@@ -619,4 +672,94 @@ ASTNode* ast_simplify(ASTNode* node) {
     }
 
     return node;
+}
+
+// ======================
+// TEXT PRINTER
+// ======================
+
+/* Plain-text form of an AST, e.g. for a raw-text fallback when the 2-D
+ * layout is too wide. Precedence-driven parenthesisation; SUB(0, x) prints
+ * as unary "-x". Numbers go through fmt_g (no printf in this build). */
+
+static int node_prec(const ASTNode* n) {
+    if (!n) return 5;
+    switch (n->type) {
+        case NODE_OP_ADD:
+        case NODE_OP_SUB: return 1;
+        case NODE_OP_MUL:
+        case NODE_OP_DIV: return 2;
+        case NODE_OP_POW: return 3;
+        default: return 4;
+    }
+}
+
+static int print_node(const ASTNode* node, char* buf, int pos, int cap, int parent_prec) {
+    if (!node || pos >= cap - 1) return pos;
+
+    int my_prec = node_prec(node);
+    int parens = my_prec < parent_prec;
+    if (parens && pos < cap - 1) buf[pos++] = '(';
+
+    if (node->type == NODE_NUM) {
+        char tmp[16];
+        int len = fmt_g(tmp, (float)node->data.num_value);
+        for (int i = 0; i < len && pos < cap - 1; i++) buf[pos++] = tmp[i];
+    } else if (node->type == NODE_SYM) {
+        const char* s = node->data.sym_name;
+        while (*s && pos < cap - 1) buf[pos++] = *s++;
+    } else if (node->type == NODE_PAREN) {
+        if (pos < cap - 1) buf[pos++] = '(';
+        pos = print_node(ast_get_arg(node), buf, pos, cap, 0);
+        if (pos < cap - 1) buf[pos++] = ')';
+    } else if (node_is_binop(node->type)) {
+        const ASTNode* L = ast_get_left(node);
+        const ASTNode* R = ast_get_right(node);
+        if (node->type == NODE_OP_SUB && ast_num_eq(L, 0.0)) {
+            if (pos < cap - 1) buf[pos++] = '-';
+            pos = print_node(R, buf, pos, cap, my_prec + 1);
+        } else {
+            char op = '?';
+            switch (node->type) {
+                case NODE_OP_ADD: op = '+'; break;
+                case NODE_OP_SUB: op = '-'; break;
+                case NODE_OP_MUL: op = '*'; break;
+                case NODE_OP_DIV: op = '/'; break;
+                case NODE_OP_POW: op = '^'; break;
+                default: break;
+            }
+            pos = print_node(L, buf, pos, cap, my_prec);
+            if (pos < cap - 1) buf[pos++] = op;
+            int right_prec = my_prec;
+            if (node->type == NODE_OP_SUB || node->type == NODE_OP_DIV) right_prec = my_prec + 1;
+            pos = print_node(R, buf, pos, cap, right_prec);
+        }
+    } else {
+        const char* fname;
+        switch (node->type) {
+            case NODE_FUNC_SIN:  fname = "sin";  break;
+            case NODE_FUNC_COS:  fname = "cos";  break;
+            case NODE_FUNC_TAN:  fname = "tan";  break;
+            case NODE_FUNC_EXP:  fname = "exp";  break;
+            case NODE_FUNC_LN:   fname = "ln";   break;
+            case NODE_FUNC_LOG:  fname = "log";  break;
+            case NODE_FUNC_SQRT: fname = "sqrt"; break;
+            case NODE_FUNC_ABS:  fname = "abs";  break;
+            default:             fname = "?";    break;
+        }
+        while (*fname && pos < cap - 1) buf[pos++] = *fname++;
+        if (pos < cap - 1) buf[pos++] = '(';
+        pos = print_node(ast_get_arg(node), buf, pos, cap, 0);
+        if (pos < cap - 1) buf[pos++] = ')';
+    }
+
+    if (parens && pos < cap - 1) buf[pos++] = ')';
+    return pos;
+}
+
+void ast_to_string(const ASTNode* node, char* buf, int buf_size) {
+    if (!buf || buf_size <= 0) return;
+    int pos = print_node(node, buf, 0, buf_size, 0);
+    if (pos >= buf_size) pos = buf_size - 1;
+    buf[pos] = '\0';
 }

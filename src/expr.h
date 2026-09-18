@@ -67,15 +67,25 @@ ASTNode* parser_init_from_string(const char* expr);
 
 void ast_free_tree(ASTNode* node);
 
+/* Node constructors (malloc'd, never NULL-checked — same as the parser).
+ * ast_create_op stores the RIGHT operand first in the child list. */
+ASTNode* ast_create_num(double value);
+ASTNode* ast_create_sym(const char* name);
+ASTNode* ast_create_op(NodeType op_type, ASTNode* left, ASTNode* right);
+ASTNode* ast_create_func(NodeType func_type, ASTNode* arg);   // also NODE_PAREN
+
 // AST utilities (consume nothing unless documented otherwise)
 ASTNode* ast_clone(const ASTNode* node);
 int      ast_contains_var(const ASTNode* node, char var);
 ASTNode* ast_simplify(ASTNode* node);                 // consumes input, returns simplified
+void     ast_to_string(const ASTNode* node, char* buf, int buf_size);   // plain text, NUL-terminated
 
 /* Child accessors. The child list from ast_create_op is right-then-left,
  * so the FIRST list element is the RIGHT operand â€” use these, never walk
  * data.children directly for operand order. */
 int      node_has_children(NodeType t);
+int      node_is_func(NodeType t);        // NODE_FUNC_SIN..NODE_FUNC_ABS
+int      ast_num_eq(const ASTNode* n, double v);   // n is NODE_NUM equal to v
 ASTNode* ast_get_left(const ASTNode* n);
 ASTNode* ast_get_right(const ASTNode* n);
 ASTNode* ast_get_arg(const ASTNode* n);   // unary functions / NODE_PAREN

@@ -135,14 +135,8 @@ static void refresh_integral(void) {
         G.integral_ab = ec_integrate(&G.fcode, G.a, G.b, 512, &G.integral_warn);
     }
     grf_reset_anchor(&G);
-    /* ------------------------------------------------------------------
-     * SYMBOLIC HOOK: a symbolic antiderivative display would plug in here.
-     * cePort's calculate_integral() / ast_derivative()
-     * (reverse_engineering/cePort/src/integrate.c:785-1426) return an AST
-     * that mathprint.c renders directly — parse G.ftext, run the rules, and
-     * show "F(x) = ..." in the status area or a popup when a rule matches.
-     * This build is numeric-only by design.
-     * ------------------------------------------------------------------ */
+    /* The symbolic antiderivative is not cached here: antideriv.c parses
+     * G.ftext and runs symbolic.c on demand when `math` is pressed. */
 }
 
 int main(void) {
