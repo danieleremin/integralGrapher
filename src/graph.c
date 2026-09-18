@@ -235,7 +235,7 @@ void grf_auto_window(GraphState *g) {
     float ymin = 0.0f, ymax = 0.0f;   /* keep the x-axis in view */
     for (int i = 0; i < GRAPH_W; i++) {
         float v = g->fcol[i];
-        if (!isnan(v)) {
+        if (!g->b_is_x && !isnan(v)) {   /* b = x: only F is drawn */
             if (v < ymin) ymin = v;
             if (v > ymax) ymax = v;
         }
@@ -340,25 +340,27 @@ static void draw_plot(const GraphState *g, int c0, int c1, int labels) {
     /* Shading between a and b. Turn the bounds into a column range once,
      * so the per-column work stays integer (see draw_curve). */
     int sy0 = zero_row(g);
-    float lo = g->a < g->b ? g->a : g->b;
-    float hi = g->a < g->b ? g->b : g->a;
-    int ca = (int)ceilf((lo - vp->xmin) / vp->pxw);
-    int cb = (int)((hi - vp->xmin) / vp->pxw);
-    if (ca < c0) ca = c0;
-    if (cb > c1 - 1) cb = c1 - 1;
-    uint8_t cur_col = 0xFF;
-    for (int c = ca; c <= cb; c++) {
-        int fyc = g->fy[c];
-        if (fyc == Y_SENT) continue;
-        int ytop = sy0 < fyc ? sy0 : fyc;
-        int ybot = sy0 < fyc ? fyc : sy0;
-        if (ytop < 0) ytop = 0;
-        if (ybot > GRAPH_H - 1) ybot = GRAPH_H - 1;
-        if (ytop > ybot) continue;
-        /* sign of f, without a float compare: below the zero row = negative */
-        uint8_t want = (fyc <= sy0) ? C_SHP : C_SHN;
-        if (want != cur_col) { gfx_SetColor(want); cur_col = want; }
-        gfx_VertLine_NoClip(c, ytop, ybot - ytop + 1);
+    if (!g->b_is_x) {   /* b = x: no interval to shade */
+        float lo = g->a < g->b ? g->a : g->b;
+        float hi = g->a < g->b ? g->b : g->a;
+        int ca = (int)ceilf((lo - vp->xmin) / vp->pxw);
+        int cb = (int)((hi - vp->xmin) / vp->pxw);
+        if (ca < c0) ca = c0;
+        if (cb > c1 - 1) cb = c1 - 1;
+        uint8_t cur_col = 0xFF;
+        for (int c = ca; c <= cb; c++) {
+            int fyc = g->fy[c];
+            if (fyc == Y_SENT) continue;
+            int ytop = sy0 < fyc ? sy0 : fyc;
+            int ybot = sy0 < fyc ? fyc : sy0;
+            if (ytop < 0) ytop = 0;
+            if (ybot > GRAPH_H - 1) ybot = GRAPH_H - 1;
+            if (ytop > ybot) continue;
+            /* sign of f, without a float compare: below the zero row = negative */
+            uint8_t want = (fyc <= sy0) ? C_SHP : C_SHN;
+            if (want != cur_col) { gfx_SetColor(want); cur_col = want; }
+            gfx_VertLine_NoClip(c, ytop, ybot - ytop + 1);
+        }
     }
 
     /* axes over the shading */
@@ -371,7 +373,7 @@ static void draw_plot(const GraphState *g, int c0, int c1, int labels) {
 
     /* curves */
     if (g->show_F) draw_curve(g->Fy, C_ACC, c0, c1);
-    draw_curve(g->fy, C_F, c0, c1);
+    if (!g->b_is_x) draw_curve(g->fy, C_F, c0, c1);
 
     /* axis tick labels (full redraws only) */
     if (labels) {
@@ -412,14 +414,16 @@ static void draw_plot(const GraphState *g, int c0, int c1, int labels) {
 
 static void draw_trace(const GraphState *g) {
     int c = g->trace_col;
+    /* the crosshair rides the curve that is actually drawn */
+    const int16_t *ys = g->b_is_x ? g->Fy : g->fy;
     gfx_SetColor(C_TRC);
-    if (g->fy[c] != Y_SENT && g->fy[c] >= 0 && g->fy[c] < GRAPH_H) {
-        gfx_HorizLine(c - 3, g->fy[c], 7);
-        gfx_VertLine(c, g->fy[c] - 3, 7);
+    if (ys[c] != Y_SENT && ys[c] >= 0 && ys[c] < GRAPH_H) {
+        gfx_HorizLine(c - 3, ys[c], 7);
+        gfx_VertLine(c, ys[c] - 3, 7);
     } else {
-        gfx_VertLine(c, 0, GRAPH_H);   /* f off-screen: show the column */
+        gfx_VertLine(c, 0, GRAPH_H);   /* off-screen: show the column */
     }
-    if (g->show_F && g->Fy[c] != Y_SENT &&
+    if (g->show_F && !g->b_is_x && g->Fy[c] != Y_SENT &&
         g->Fy[c] >= 1 && g->Fy[c] < GRAPH_H - 1) {
         gfx_FillRectangle(c - 1, g->Fy[c] - 1, 3, 3);
     }
@@ -443,15 +447,24 @@ static void draw_status(const GraphState *g, const char *msg) {
     line[p++] = '[';
     p += fmt_g(line + p, g->a);
     line[p++] = ',';
-    p += fmt_g(line + p, g->b);
-    memcpy(line + p, "] = ", 4); p += 4;
-    p += fmt_g(line + p, g->integral_ab);
-    if (g->integral_warn) { memcpy(line + p, " !", 3); p += 2; }
+    if (g->b_is_x) {
+        memcpy(line + p, "x] = F(x)", 10); p += 9;
+    } else {
+        p += fmt_g(line + p, g->b);
+        memcpy(line + p, "] = ", 4); p += 4;
+        p += fmt_g(line + p, g->integral_ab);
+        if (g->integral_warn) { memcpy(line + p, " !", 3); p += 2; }
+    }
     line[p] = '\0';
     gfx_PrintStringXY(line, 13, STATUS_Y + 5);
 
-    gfx_SetTextFGColor(g->show_F ? C_ACC : C_FG);
-    gfx_PrintStringXY(g->show_F ? "F:on" : "F:off", GRAPH_W - 44, STATUS_Y + 5);
+    if (g->b_is_x) {
+        gfx_SetTextFGColor(C_ACC);
+        gfx_PrintStringXY("b=x", GRAPH_W - 44, STATUS_Y + 5);
+    } else {
+        gfx_SetTextFGColor(g->show_F ? C_ACC : C_FG);
+        gfx_PrintStringXY(g->show_F ? "F:on" : "F:off", GRAPH_W - 44, STATUS_Y + 5);
+    }
     gfx_SetTextFGColor(C_FG);
 
     if (msg) {
@@ -554,7 +567,7 @@ int grf_run(GraphState *g) {
             status_changed();
             dirty = 1;
         }
-        if (key_edge(kb_KeyGraph)) {
+        if (key_edge(kb_KeyGraph) && !g->b_is_x) {   /* b = x: F is all there is */
             g->show_F = !g->show_F;
             status_changed();
             dirty = 1;

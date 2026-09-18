@@ -14,7 +14,7 @@ static const char *page_about[] = {
     "",
     "GRAPH also overlays F(x), the",
     "running integral of f from a.",
-    "",
+    "Enter x as b to graph only F(x).",
     "Typing expressions:",
     " + - * / ^ ( ) and the keys for",
     " sin cos tan ln log",

@@ -25,7 +25,10 @@ typedef struct {
     /* raw user text — source of truth for re-editing */
     char ftext[65], atext[33], btext[33];
     ExprCode fcode;                /* compiled simplified f */
-    float a, b;
+    float a, b;                    /* b == a when b_is_x */
+    /* b typed as "x": the integral *is* the function, so only F(x) is
+     * drawn — no f curve, no shading, no headline value. */
+    uint8_t b_is_x;
     float integral_ab;             /* headline Simpson value for the bar */
     uint8_t integral_warn;         /* 1 if NaN samples were skipped */
 

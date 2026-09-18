@@ -42,20 +42,30 @@ static const char* validate_f(const char *text) {
     return NULL;
 }
 
-static const char* validate_bound(const char *text) {
+static const char* validate_bound(const char *text, const char *x_err) {
     ExprCode tmp;
     char sym[32];
     ASTNode *t = parser_init_from_string(text);
     if (t) {
         int has_x = ast_contains_var(t, 'x');
         ast_free_tree(t);
-        if (has_x) return "x is not allowed here";
+        if (has_x) return x_err;
     }
     if (compile_text(text, &tmp, sym)) return explain(sym);
     float v = ec_eval(&tmp, 0.0f);
     if (isnan(v)) return "That value is undefined";
     if (fabsf(v) > 1e30f) return "Value too large";
     return NULL;
+}
+
+static const char* validate_a(const char *text) {
+    return validate_bound(text, "x is not allowed here");
+}
+
+/* b may be exactly "x" (graph F(x) alone) or a constant. */
+static const char* validate_b(const char *text) {
+    if (strcmp(text, "x") == 0) return NULL;
+    return validate_bound(text, "Use x by itself, or a number");
 }
 
 static float eval_const(const char *text) {
@@ -78,31 +88,52 @@ static int read_function(void) {
     return r;
 }
 
+/* a then b. CLEAR on an empty line steps back: b -> a -> caller, which
+ * gets INPUT_CANCEL. Whatever was accepted along the way stays in G. */
 static int read_bounds(void) {
-    InputCfg cfg = { "a = ", 0, validate_bound };
+    InputCfg cfg = { NULL, 0, NULL };
     char tmp[sizeof G.atext];
+    int step = 0, r = INPUT_OK;
 
-    strcpy(tmp, G.atext);
-    int r = input_line(&cfg, tmp, sizeof tmp);
-    if (r == INPUT_QUIT) return r;
-    if (r == INPUT_OK) {
-        strcpy(G.atext, tmp);
-        G.a = eval_const(G.atext);
+    while (step < 2) {
+        if (step == 0) {
+            cfg.title = "a = "; cfg.allow_x = 0; cfg.validate = validate_a;
+            strcpy(tmp, G.atext);
+        } else {
+            cfg.title = "b = "; cfg.allow_x = 1; cfg.validate = validate_b;
+            strcpy(tmp, G.btext);
+        }
+        r = input_line(&cfg, tmp, sizeof tmp);
+        if (r == INPUT_QUIT) return r;
+        if (r == INPUT_CANCEL) {
+            if (step == 0) break;
+            step = 0;
+            continue;
+        }
+        if (step == 0) {
+            strcpy(G.atext, tmp);
+            G.a = eval_const(G.atext);
+        } else {
+            strcpy(G.btext, tmp);
+            G.b_is_x = strcmp(G.btext, "x") == 0;
+            if (G.b_is_x) G.show_F = 1;
+            else G.b = eval_const(G.btext);
+        }
+        step++;
     }
-
-    cfg.title = "b = ";
-    strcpy(tmp, G.btext);
-    r = input_line(&cfg, tmp, sizeof tmp);
-    if (r == INPUT_QUIT) return r;
-    if (r == INPUT_OK) {
-        strcpy(G.btext, tmp);
-        G.b = eval_const(G.btext);
-    }
-    return INPUT_OK;
+    /* With b = x there is no fixed interval; parking b on a keeps the
+     * window-fitting code (which only looks at [a,b]) happy. */
+    if (G.b_is_x) G.b = G.a;
+    return r;
 }
 
 static void refresh_integral(void) {
-    G.integral_ab = ec_integrate(&G.fcode, G.a, G.b, 512, &G.integral_warn);
+    if (G.b_is_x) {
+        G.integral_ab = 0.0f;
+        G.integral_warn = 0;
+    } else {
+        G.integral_ab = ec_integrate(&G.fcode, G.a, G.b, 512, &G.integral_warn);
+    }
     grf_reset_anchor(&G);
     /* ------------------------------------------------------------------
      * SYMBOLIC HOOK: a symbolic antiderivative display would plug in here.
@@ -120,16 +151,18 @@ int main(void) {
     gfx_SetTextConfig(gfx_text_clip);
     grf_init_palette();
 
-    memset(&G, 0, sizeof G);
-    strcpy(G.atext, "0");
-    strcpy(G.btext, "1");
-    G.a = 0.0f;
-    G.b = 1.0f;
+    memset(&G, 0, sizeof G);      /* all three prompts start blank */
     G.show_F = 1;
     G.trace_col = GRAPH_W / 2;
 
-    if (read_function() != INPUT_OK) goto done;   /* first run: back = quit */
-    if (read_bounds() == INPUT_QUIT) goto done;
+    /* First run: every value must be typed. Backing out of a returns to
+     * f; backing out of f quits. */
+    for (;;) {
+        if (read_function() != INPUT_OK) goto done;
+        int rb = read_bounds();
+        if (rb == INPUT_QUIT) goto done;
+        if (rb == INPUT_OK) break;
+    }
     refresh_integral();
     grf_auto_window(&G);
 

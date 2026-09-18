@@ -42,11 +42,14 @@ The usual keys work — `+ - * / ^ ( )`, the digits, `x` from `[X,T,θ,n]`, and
 
 Multiplication is inserted for you where it is implied, so `2x`, `3sin(x)`, and
 `(x+1)(x-2)` all parse. `ENTER` accepts, `DEL` backspaces, `CLEAR` empties the
-line — and on an already-empty line it backs out, which quits from the very
-first prompt.
+line — and on an already-empty line it backs out to the previous prompt
+(b → a → f), which quits from the very first one. The prompts start blank;
+nothing is assumed for `a` or `b`.
 
 The bounds `a` and `b` are typed the same way but may not contain `x`; `2pi`
-and `sqrt(2)` are fine.
+and `sqrt(2)` are fine. The one exception is `b = x` on its own: the integral
+is then a function of x, so the program graphs only F(x) = ∫ₐˣ f(t)dt — no
+f curve, no shading — and the status bar reads `∫[a,x] = F(x)`.
 
 ### Graph screen
 
@@ -55,7 +58,7 @@ and `sqrt(2)` are fine.
 | arrows | Pan — hold to keep moving |
 | `+` / `−` | Zoom in / out |
 | `trace` | Trace cursor on/off |
-| `graph` | Show/hide the F(x) curve |
+| `graph` | Show/hide the F(x) curve (no effect when b = x) |
 | `y=` | Edit f(x) |
 | `window` | Edit the bounds a and b |
 | `zoom` | Reset to the standard window |
@@ -192,4 +195,4 @@ about 7 KB.
   zoom on a transcendental function takes a moment.
 
 # Note
-I vibecoded this, don't expect it to work well
+I vibecoded this
